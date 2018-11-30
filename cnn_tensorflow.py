@@ -22,11 +22,11 @@ max_query_words=12
 max_passage_words=50
 emb_dim=50
 n_classes = 2 
-batch_size = 100
-n_epoches = 5
-dataset_size = 500
-total_size = 100000
-n_runs=20
+batch_size = 500
+n_epoches = 10
+dataset_size = 2000
+total_size = 10000
+n_runs = 50
 starting = True
 
 #cnn constants
@@ -198,21 +198,19 @@ def train_cnn_network(x1,x2,start=False):
     optimizer = tf.train.AdamOptimizer().minimize(cost)
     correct = tf.equal(tf.argmax(prediction, 1), tf.argmax(y, 1))
     accuracy = tf.reduce_mean(tf.cast(correct, 'float'))
-    saver = tf.train.Saver({"qc1":weights_query['W_conv1']})#Need to add it for all the weights and bias variables
+    saver = tf.train.Saver({"qc1":weights_query['W_conv1'],"qc2":weights_query['W_conv2'],"qfc":weights_query['W_fc'],"qout":weights_query['out'],"pc1":weights_passage['W_conv1'],"pc2":weights_passage['W_conv2'],"pfc":weights_passage['W_fc'],"pout":weights_passage['out'],"bqc1":bias_query['b_conv1'],"bqc2":bias_query['b_conv2'],"bqfc":bias_query['b_fc'],"bqout":bias_query['out'],"bpc1":bias_passage['b_conv1'],"bpc2":bias_passage['b_conv2'],"bpfc":bias_passage['b_fc'],"bpout":bias_passage['out'],"comboout":weights_combined['out'],"combooutb":biased_combined['out']}) #Need to add it for all the weights and bias variables
 
     with tf.Session() as sess:
-        if start == True :
-      		sess.run(tf.global_variables_initializer())
-        else:
-        	sess.run(tf.local_variables_initializer())
-        	saver.restore(sess, "/tmp/model.ckpt")
+      	sess.run(tf.global_variables_initializer())#intialize everything(like a constructor) and then restore the required variables
+        if start == False:
+        	saver.restore(sess, "./model.ckpt")
         for epoch in range(n_epoches):
             epoch_loss = 0
             for i in range(int(dataset_size/batch_size)):
                 _, c = sess.run([optimizer,cost], feed_dict={x1 : query_vectors[batch_size*i:batch_size*(i+1),:],x2 : passage_vectors[batch_size*(i):batch_size*(i+1),:],y : labels[batch_size*(i):batch_size*(i+1),:] })
                 epoch_loss+=c
             print('Epoch', epoch+1, 'completed out of',n_epoches,'loss:',epoch_loss)
-        saver.save(sess, '/tmp/model.ckpt')
+        saver.save(sess, './model.ckpt')
 
 
 
@@ -249,3 +247,4 @@ if __name__ == "__main__":
 			passage_vectors = []
 			labels = []
 			starting = False
+	print("Training done")
