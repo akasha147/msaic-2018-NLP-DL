@@ -23,9 +23,10 @@ max_passage_words=50
 emb_dim=50
 n_classes = 2 
 batch_size = 100
-n_epoches = 10
+n_epoches = 5
 dataset_size = 500
-total_size = 60000
+total_size = 100000
+n_runs=20
 starting = True
 
 #cnn constants
@@ -63,7 +64,6 @@ CNN model
 1)query_vector->conv_layer1->maxpool(relu)->conv_layer2->maxpool(relu)->fully_connected_query->output_query
 2)passage_vector->conv_layer1->maxpool(relu)->conv_layer2->maxpool(relu)->fully_connected_passage->output_passage
 3)output_query+output_passage->output
-
 weights representation
 conv_layer= [x dimension of the filter,y dimension of the filter,number of inputs,number of filters]
 fc_layer = [don't know,number of ouput nodes]
@@ -79,14 +79,14 @@ x2 = tf.placeholder('float',[batch_size,max_passage_words*emb_dim])# to hold pas
 y  = tf.placeholder('float',[batch_size,n_classes])# to hold labels
 keep_prob = tf.placeholder(tf.float32)
 
-weights_query = {'W_conv1': tf.Variable(tf.random_normal([filter1_dimX,filter1_dimY,filter1_n,filter1_outn])),'W_conv2': tf.Variable(tf.random_normal([filter2_dimX,filter2_dimY,filter2_n,filter2_outn])),'W_fc' :tf.Variable(tf.random_normal([fc_x_query,fc_y_query])),'out':tf.Variable(tf.random_normal([fc_y_query,fc_out_query]))}
-weights_passage = {'W_conv1': tf.Variable(tf.random_normal([filter1_dimX,filter1_dimY,filter1_n,filter1_outn])),'W_conv2': tf.Variable(tf.random_normal([filter2_dimX,filter2_dimY,filter2_n,filter2_outn])),'W_fc' :tf.Variable(tf.random_normal([fc_x_passage,fc_y_passage])),'out':tf.Variable(tf.random_normal([fc_y_passage,fc_out_passage]))}
+weights_query = {'W_conv1': tf.Variable(tf.random_normal([filter1_dimX,filter1_dimY,filter1_n,filter1_outn],name="qc1")),'W_conv2': tf.Variable(tf.random_normal([filter2_dimX,filter2_dimY,filter2_n,filter2_outn],name="qc2")),'W_fc' :tf.Variable(tf.random_normal([fc_x_query,fc_y_query],name="qfc")),'out':tf.Variable(tf.random_normal([fc_y_query,fc_out_query],name="qout"))}
+weights_passage = {'W_conv1': tf.Variable(tf.random_normal([filter1_dimX,filter1_dimY,filter1_n,filter1_outn],name="pc1")),'W_conv2': tf.Variable(tf.random_normal([filter2_dimX,filter2_dimY,filter2_n,filter2_outn],name="pc2")),'W_fc' :tf.Variable(tf.random_normal([fc_x_passage,fc_y_passage],name="pfc")),'out':tf.Variable(tf.random_normal([fc_y_passage,fc_out_passage],name="pout"))}
 	
-bias_query = {'b_conv1':tf.Variable(tf.random_normal([filter1_outn])),'b_conv2':tf.Variable(tf.random_normal([filter2_outn])),'b_fc':tf.Variable(tf.random_normal([fc_y_query])),'out':tf.Variable(tf.random_normal([fc_out_query]))}
-bias_passage = {'b_conv1':tf.Variable(tf.random_normal([filter1_outn])),'b_conv2':tf.Variable(tf.random_normal([filter2_outn])),'b_fc':tf.Variable(tf.random_normal([fc_y_passage])),'out':tf.Variable(tf.random_normal([fc_out_passage]))}
+bias_query = {'b_conv1':tf.Variable(tf.random_normal([filter1_outn],name="qbc1")),'b_conv2':tf.Variable(tf.random_normal([filter2_outn],name="qbc2")),'b_fc':tf.Variable(tf.random_normal([fc_y_query],name="qbfc")),'out':tf.Variable(tf.random_normal([fc_out_query],name="qbout"))}
+bias_passage = {'b_conv1':tf.Variable(tf.random_normal([filter1_outn],name="pbc1")),'b_conv2':tf.Variable(tf.random_normal([filter2_outn],name="pbc2")),'b_fc':tf.Variable(tf.random_normal([fc_y_passage],name="pbfc")),'out':tf.Variable(tf.random_normal([fc_out_passage],name="pbout"))}
 	
-weights_combined = {'out':tf.Variable(tf.random_normal([fc_x_combined,fc_y_combined]))}
-biased_combined = {'out':tf.Variable(tf.random_normal([fc_y_combined]))}
+weights_combined = {'out':tf.Variable(tf.random_normal([fc_x_combined,fc_y_combined],name="comboout"))}
+biased_combined = {'out':tf.Variable(tf.random_normal([fc_y_combined],name="combooutb"))}
 
 
 #Load data from the file and store into np.arrays after converting them into word vectors
@@ -98,66 +98,66 @@ def loadData(fileHandle):
 
 #Load the embedding file into the dictionary
 def loadEmbeddings(embeddingfile):
-    global GloveEmbeddings,emb_dim
+	global GloveEmbeddings,emb_dim
 
-    fe = open(embeddingfile,"r")
-    for line in fe:
-        tokens= line.strip().split()
-        word = tokens[0]
-        vec = tokens[1:]
-        vec = " ".join(vec)
-        GloveEmbeddings[word]=vec
-    #For padding purpose(to max size)
-    GloveEmbeddings["zerovec"] = "0.0 "*emb_dim
-    fe.close()
+	fe = open(embeddingfile,"r")
+	for line in fe:
+		tokens= line.strip().split()
+		word = tokens[0]
+		vec = tokens[1:]
+		vec = " ".join(vec)
+		GloveEmbeddings[word]=vec
+	#For padding purpose(to max size)
+	GloveEmbeddings["zerovec"] = "0.0 "*emb_dim
+	fe.close()
 
 
 #Takes a line from the dataset file  as input produces the corresponding word embeddings
 #Populates three list -Query,Passage,Labels
 def TextDataToCTF(inputData,isEvaluation=False):
    
-        tokens = inputData.strip().lower().split("\t")
-        query_id,query,passage,label = tokens[0],tokens[1],tokens[2],tokens[3]
+		tokens = inputData.strip().lower().split("\t")
+		query_id,query,passage,label = tokens[0],tokens[1],tokens[2],tokens[3]
 
-        #****Query Processing****
-        words = re.split('\W+', query)
-        words = [x for x in words if x] 
-        word_count = len(words)
-        remaining = max_query_words - word_count  
-        if(remaining>0):
-            words += ["zerovec"]*remaining # Pad zero vecs if the word count is less than max_query_words
-        words = words[:max_query_words] # trim extra words
-        #create Query Feature vector 
-        query_feature_vector = ""
-        for word in words:
-            if(word in GloveEmbeddings):
-                query_feature_vector += GloveEmbeddings[word]+" "
-            else:
-                query_feature_vector += GloveEmbeddings['zerovec']+" " #Add zerovec for OOV terms
-    
-        #***** Passage Processing **********
-        words = re.split('\W+', passage)
-        words = [x for x in words if x] # to remove empty words 
-        word_count = len(words)
-        remaining = max_passage_words - word_count  
-        if(remaining>0):
-            words += ["zerovec"]*remaining # Pad zero vecs if the word count is less than max_passage_words
-        words = words[:max_passage_words] # trim extra words
-        #create Passage Feature vector 
-        passage_feature_vector = ""
-        for word in words:
-            if(word in GloveEmbeddings):
-                passage_feature_vector += GloveEmbeddings[word]+" "
-            else:
-                passage_feature_vector += GloveEmbeddings['zerovec']+" "
-        #convert label
-        label_str = 0 if label=="0" else 1 
-        if isEvaluation == False :
-        	labels.append(label_str)
+		#****Query Processing****
+		words = re.split('\W+', query)
+		words = [x for x in words if x] 
+		word_count = len(words)
+		remaining = max_query_words - word_count  
+		if(remaining>0):
+			words += ["zerovec"]*remaining # Pad zero vecs if the word count is less than max_query_words
+		words = words[:max_query_words] # trim extra words
+		#create Query Feature vector 
+		query_feature_vector = ""
+		for word in words:
+			if(word in GloveEmbeddings):
+				query_feature_vector += GloveEmbeddings[word]+" "
+			else:
+				query_feature_vector += GloveEmbeddings['zerovec']+" " #Add zerovec for OOV terms
+	
+		#***** Passage Processing **********
+		words = re.split('\W+', passage)
+		words = [x for x in words if x] # to remove empty words 
+		word_count = len(words)
+		remaining = max_passage_words - word_count  
+		if(remaining>0):
+			words += ["zerovec"]*remaining # Pad zero vecs if the word count is less than max_passage_words
+		words = words[:max_passage_words] # trim extra words
+		#create Passage Feature vector 
+		passage_feature_vector = ""
+		for word in words:
+			if(word in GloveEmbeddings):
+				passage_feature_vector += GloveEmbeddings[word]+" "
+			else:
+				passage_feature_vector += GloveEmbeddings['zerovec']+" "
+		#convert label
+		label_str = 0 if label=="0" else 1 
+		if isEvaluation == False :
+			labels.append(label_str)
 
-        query_vectors.append([float(v) for v in query_feature_vector.split()])#Insert the entire word embedding of the query into the vector(size:1*(max_query_size*emb_dim))
-        passage_vectors.append([float(v) for v in passage_feature_vector.split()])#Insert the entire word embedding of the passage into the vector(size:1*(max_passage_size*emb_dim))
-        
+		query_vectors.append([float(v) for v in query_feature_vector.split()])#Insert the entire word embedding of the query into the vector(size:1*(max_query_size*emb_dim))
+		passage_vectors.append([float(v) for v in passage_feature_vector.split()])#Insert the entire word embedding of the passage into the vector(size:1*(max_passage_size*emb_dim))
+		
 #Definiton of the CNN model described above in tensorflow
 def cnn_model(x_query,x_passage):
 	
@@ -193,55 +193,59 @@ def maxpool2D(x):
 #Function to train the network
 def train_cnn_network(x1,x2,start=False):
 	
-	prediction = cnn_model(x1,x2)
-	cost = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits_v2(logits=prediction, labels=y))
-	optimizer = tf.train.AdamOptimizer().minimize(cost)
-	correct = tf.equal(tf.argmax(prediction, 1), tf.argmax(y, 1))
-	accuracy = tf.reduce_mean(tf.cast(correct, 'float'))
-	saver = tf.train.Saver()
+    prediction = cnn_model(x1,x2)
+    cost = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits_v2(logits=prediction, labels=y))
+    optimizer = tf.train.AdamOptimizer().minimize(cost)
+    correct = tf.equal(tf.argmax(prediction, 1), tf.argmax(y, 1))
+    accuracy = tf.reduce_mean(tf.cast(correct, 'float'))
+    saver = tf.train.Saver({"qc1":weights_query['W_conv1']})#Need to add it for all the weights and bias variables
 
-	with tf.Session() as sess:
-		sess.run(tf.global_variables_initializer())
-		
-		for epoch in range(n_epoches):
-			epoch_loss = 0
-			for i in range(int(dataset_size/batch_size)):
-				_, c = sess.run([optimizer,cost], feed_dict={x1 : query_vectors[batch_size*i:batch_size*(i+1),:],x2 : passage_vectors[batch_size*(i):batch_size*(i+1),:],y : labels[batch_size*(i):batch_size*(i+1),:] })
-       			epoch_loss += c
-       			print('Epoch', epoch+1, 'completed out of',n_epoches,'loss:',epoch_loss)
-       		saver.save(sess, "./ckpt/model.ckpt")
+    with tf.Session() as sess:
+        if start == True :
+      		sess.run(tf.global_variables_initializer())
+        else:
+        	sess.run(tf.local_variables_initializer())
+        	saver.restore(sess, "/tmp/model.ckpt")
+        for epoch in range(n_epoches):
+            epoch_loss = 0
+            for i in range(int(dataset_size/batch_size)):
+                _, c = sess.run([optimizer,cost], feed_dict={x1 : query_vectors[batch_size*i:batch_size*(i+1),:],x2 : passage_vectors[batch_size*(i):batch_size*(i+1),:],y : labels[batch_size*(i):batch_size*(i+1),:] })
+                epoch_loss+=c
+            print('Epoch', epoch+1, 'completed out of',n_epoches,'loss:',epoch_loss)
+        saver.save(sess, '/tmp/model.ckpt')
+
 
 
 
 
 if __name__ == "__main__":
 
-    #Filenames
+	#Filenames
+	#trainSetFileName = "traindata.tsv"
     trainSetFileName = "summarized_dataset.tsv"
     validationSetFileName = "ValidationData.ctf"
     testSetFileName = "EvaluationData.ctf"
     submissionFileName = "answer.tsv"
     embeddingFileName = "glove.6B.50d.txt"
-
-
+    
     loadEmbeddings(embeddingFileName)#Load the file embeddings
     trainData=open(trainSetFileName,'r')#Open the training file
-    
     #Need some work here
-    for i in range(10):
-    	loadData(trainData)
-    	print("Using trainingdata "+str(i))
-    	query_vectors = np.array(query_vectors) #Convert the list into 2D-array(shape :dataset_size*(max_query_size*emb_dim))
-    	passage_vectors = np.array(passage_vectors)#Convert the list into 2D-array(shape :dataset_size*(max_passage_size*emb_dim)
-    	labels = np.array(([[v,1-v] for v in labels]))#converts the list into 2D-array("1,0" if label=0 else="0,1" shape :dataset_size*n_classes
-    	if starting == False :
-    		train_cnn_network(x1,x2)#Call the training function
-    	else :
-    		train_cnn_network(x1,x2,True)
-    	#Reinitalize the vectors for the next round
-    	query_vectors = []
-    	passage_vectors = []
-    	labels = []
-    	starting = False
-
-    
+    for i in range(n_runs):
+    	trainData=open(trainSetFileName,'r')
+    	print("Run :"+str(i+1))
+    	for i in range(total_size/dataset_size):
+			loadData(trainData) #reads dataset_size(500) lines from the file
+			print("Using trainingdata "+str(i))
+			query_vectors = np.array(query_vectors) #Convert the list into 2D-array(shape :dataset_size*(max_query_size*emb_dim))
+			passage_vectors = np.array(passage_vectors)#Convert the list into 2D-array(shape :dataset_size*(max_passage_size*emb_dim)
+			labels = np.array(([[v,1-v] for v in labels]))#converts the list into 2D-array("1,0" if label=0 else="0,1" shape :dataset_size*n_classes
+			if starting == False :
+				train_cnn_network(x1,x2)#Call the training function
+			else :
+				train_cnn_network(x1,x2,True)
+			#Reinitalize the vectors for the next round
+			query_vectors = []
+			passage_vectors = []
+			labels = []
+			starting = False
