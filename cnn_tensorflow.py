@@ -22,12 +22,13 @@ max_query_words=12
 max_passage_words=50
 emb_dim=50
 n_classes = 2 
-batch_size = 500
-n_epoches = 10
+batch_size = 50*18
+n_epoches = 5
 dataset_size = 2000
-total_size = 10000
-n_runs = 50
+total_size = 500000
+n_runs = 5
 starting = True
+over_sampled_dataset_size = dataset_size*1.8
 
 #cnn constants
 #for conv1 filter
@@ -91,10 +92,12 @@ biased_combined = {'out':tf.Variable(tf.random_normal([fc_y_combined],name="comb
 
 #Load data from the file and store into np.arrays after converting them into word vectors
 def loadData(fileHandle):
-
-	for i in range(dataset_size):
+    global dataset_size
+    for i in range(dataset_size):
 		datapoint = fileHandle.readline()
+		#print(datapoint)
 		TextDataToCTF(datapoint);
+   
 
 #Load the embedding file into the dictionary
 def loadEmbeddings(embeddingfile):
@@ -108,7 +111,7 @@ def loadEmbeddings(embeddingfile):
 		vec = " ".join(vec)
 		GloveEmbeddings[word]=vec
 	#For padding purpose(to max size)
-	GloveEmbeddings["zerovec"] = "0.0 "*emb_dim
+	GloveEmbeddings['zerovec'] = "0.0 "*emb_dim
 	fe.close()
 
 
@@ -158,6 +161,17 @@ def TextDataToCTF(inputData,isEvaluation=False):
 		query_vectors.append([float(v) for v in query_feature_vector.split()])#Insert the entire word embedding of the query into the vector(size:1*(max_query_size*emb_dim))
 		passage_vectors.append([float(v) for v in passage_feature_vector.split()])#Insert the entire word embedding of the passage into the vector(size:1*(max_passage_size*emb_dim))
 		
+		# For oversampling,to balance the dataset
+		if label_str == 1:
+			for _ in range(8):
+				query_vectors.append([float(v) for v in query_feature_vector.split()])
+				passage_vectors.append([float(v) for v in passage_feature_vector.split()])
+				labels.append(label_str)
+		#Now we will have 18 query-passage pairs(9 class 0 9 class 1)
+
+
+
+
 #Definiton of the CNN model described above in tensorflow
 def cnn_model(x_query,x_passage):
 	
@@ -191,27 +205,46 @@ def maxpool2D(x):
 	return tf.nn.max_pool(x,ksize=[1,2,2,1],strides=[1,2,2,1],padding="SAME")
 
 #Function to train the network
-def train_cnn_network(x1,x2,start=False):
-	
-    prediction = cnn_model(x1,x2)
-    cost = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits_v2(logits=prediction, labels=y))
-    optimizer = tf.train.AdamOptimizer().minimize(cost)
-    correct = tf.equal(tf.argmax(prediction, 1), tf.argmax(y, 1))
-    accuracy = tf.reduce_mean(tf.cast(correct, 'float'))
-    saver = tf.train.Saver({"qc1":weights_query['W_conv1'],"qc2":weights_query['W_conv2'],"qfc":weights_query['W_fc'],"qout":weights_query['out'],"pc1":weights_passage['W_conv1'],"pc2":weights_passage['W_conv2'],"pfc":weights_passage['W_fc'],"pout":weights_passage['out'],"bqc1":bias_query['b_conv1'],"bqc2":bias_query['b_conv2'],"bqfc":bias_query['b_fc'],"bqout":bias_query['out'],"bpc1":bias_passage['b_conv1'],"bpc2":bias_passage['b_conv2'],"bpfc":bias_passage['b_fc'],"bpout":bias_passage['out'],"comboout":weights_combined['out'],"combooutb":biased_combined['out']}) #Need to add it for all the weights and bias variables
+def train_cnn_network(trainSetFileName):
+	global query_vectors,passage_vectors,labels,dataset_size
+	prediction = cnn_model(x1,x2)
+	cost = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits_v2(logits=prediction, labels=y))
+	optimizer = tf.train.AdamOptimizer().minimize(cost)
+	saver = tf.train.Saver({"qc1":weights_query['W_conv1'],"qc2":weights_query['W_conv2'],"qfc":weights_query['W_fc'],"qout":weights_query['out'],"pc1":weights_passage['W_conv1'],"pc2":weights_passage['W_conv2'],"pfc":weights_passage['W_fc'],"pout":weights_passage['out'],"bqc1":bias_query['b_conv1'],"bqc2":bias_query['b_conv2'],"bqfc":bias_query['b_fc'],"bqout":bias_query['out'],"bpc1":bias_passage['b_conv1'],"bpc2":bias_passage['b_conv2'],"bpfc":bias_passage['b_fc'],"bpout":bias_passage['out'],"comboout":weights_combined['out'],"combooutb":biased_combined['out']}) #Need to add it for all the weights and bias variables
 
-    with tf.Session() as sess:
-      	sess.run(tf.global_variables_initializer())#intialize everything(like a constructor) and then restore the required variables
-        if start == False:
-        	saver.restore(sess, "./model.ckpt")
-        for epoch in range(n_epoches):
-            epoch_loss = 0
-            for i in range(int(dataset_size/batch_size)):
-                _, c = sess.run([optimizer,cost], feed_dict={x1 : query_vectors[batch_size*i:batch_size*(i+1),:],x2 : passage_vectors[batch_size*(i):batch_size*(i+1),:],y : labels[batch_size*(i):batch_size*(i+1),:] })
-                epoch_loss+=c
-            print('Epoch', epoch+1, 'completed out of',n_epoches,'loss:',epoch_loss)
-        saver.save(sess, './model.ckpt')
+	with tf.Session() as sess:
+		sess.run(tf.global_variables_initializer())#intialize everything(like a constructor) and then restore the required variables
+		for j in range(n_runs):
+			trainData=open(trainSetFileName,'r')
+      		print("Run :"+str(j+1))
+      		for i in range(total_size/dataset_size):
+      			loadData(trainData) #reads dataset_size(500) lines from the file
+      			print("Using trainingdata "+str(i))
+      			query_vectors = np.array(query_vectors) #Convert the list into 2D-array(shape :dataset_size*(max_query_size*emb_dim))
+      			passage_vectors = np.array(passage_vectors)#Convert the list into 2D-array(shape :dataset_size*(max_passage_size*emb_dim)
+      			labels = np.array(([[v,1-v] for v in labels]))
+      			for epoch in range(n_epoches):
+      				epoch_loss = 0
+      				for i in range(int(over_sampled_dataset_size/batch_size)):
+      					_, c = sess.run([optimizer,cost], feed_dict={x1 : query_vectors[batch_size*i:batch_size*(i+1),:],x2 : passage_vectors[batch_size*(i):batch_size*(i+1),:],y : labels[batch_size*(i):batch_size*(i+1),:] })
+      					epoch_loss+=c
+       				print('Epoch', epoch+1, 'completed out of',n_epoches,'loss:',epoch_loss)
+        		saver.save(sess, './model2.ckpt')
+        		query_vectors = []
+        		passage_vectors = []
+        		labels = []
+        		
 
+def validate_model(x1,x2,y):
+	prediction = cnn_model(x1,x2)
+	correct = tf.equal(tf.argmax(prediction, 1), tf.argmax(y, 1))
+	accuracy = tf.reduce_mean(tf.cast(correct, 'float'))
+	saver = tf.train.Saver({"qc1":weights_query['W_conv1'],"qc2":weights_query['W_conv2'],"qfc":weights_query['W_fc'],"qout":weights_query['out'],"pc1":weights_passage['W_conv1'],"pc2":weights_passage['W_conv2'],"pfc":weights_passage['W_fc'],"pout":weights_passage['out'],"bqc1":bias_query['b_conv1'],"bqc2":bias_query['b_conv2'],"bqfc":bias_query['b_fc'],"bqout":bias_query['out'],"bpc1":bias_passage['b_conv1'],"bpc2":bias_passage['b_conv2'],"bpfc":bias_passage['b_fc'],"bpout":bias_passage['out'],"comboout":weights_combined['out'],"combooutb":biased_combined['out']}) #Need to add it for all the weights and bias variables
+	with tf.Session() as sess:
+		saver.restore(sess, "./model2.ckpt")
+		a=accuracy.eval({x1:query_vectors,x2:passage_vectors, y:labels})
+		pred=prediction.eval({x1:query_vectors,x2:passage_vectors, y:labels})
+		#Add print satements here
 
 
 
@@ -220,31 +253,22 @@ if __name__ == "__main__":
 
 	#Filenames
 	#trainSetFileName = "traindata.tsv"
-    trainSetFileName = "summarized_dataset.tsv"
-    validationSetFileName = "ValidationData.ctf"
+    trainSetFileName = "data.tsv"
+    validationSetFileName = "valid1.tsv"
     testSetFileName = "EvaluationData.ctf"
     submissionFileName = "answer.tsv"
     embeddingFileName = "glove.6B.50d.txt"
     
-    loadEmbeddings(embeddingFileName)#Load the file embeddings
-    trainData=open(trainSetFileName,'r')#Open the training file
-    #Need some work here
-    for i in range(n_runs):
-    	trainData=open(trainSetFileName,'r')
-    	print("Run :"+str(i+1))
-    	for i in range(total_size/dataset_size):
-			loadData(trainData) #reads dataset_size(500) lines from the file
-			print("Using trainingdata "+str(i))
-			query_vectors = np.array(query_vectors) #Convert the list into 2D-array(shape :dataset_size*(max_query_size*emb_dim))
-			passage_vectors = np.array(passage_vectors)#Convert the list into 2D-array(shape :dataset_size*(max_passage_size*emb_dim)
-			labels = np.array(([[v,1-v] for v in labels]))#converts the list into 2D-array("1,0" if label=0 else="0,1" shape :dataset_size*n_classes
-			if starting == False :
-				train_cnn_network(x1,x2)#Call the training function
-			else :
-				train_cnn_network(x1,x2,True)
-			#Reinitalize the vectors for the next round
-			query_vectors = []
-			passage_vectors = []
-			labels = []
-			starting = False
-	print("Training done")
+    loadEmbeddings(embeddingFileName)
+    
+    #This is for validation
+    # validationData = open(validationSetFileName,'r')
+    # loadData(validationData) 
+    # query_vectors = np.array(query_vectors) 
+    # passage_vectors = np.array(passage_vectors)
+    # labels = np.array(([[v,1-v] for v in labels]))
+    # validate_model(x1,x2,y)
+    
+    #This is for training
+    train_cnn_network(trainSetFileName)
+
