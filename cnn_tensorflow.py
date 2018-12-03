@@ -7,6 +7,7 @@ import re
 query_vectors = []
 passage_vectors = []
 labels = []
+train_queryid=0
 
 #dictionaries
 GloveEmbeddings = {}  # to hold the glove embeddings(word-vector pair)
@@ -22,13 +23,18 @@ max_query_words=12
 max_passage_words=50
 emb_dim=50
 n_classes = 2 
-batch_size = 50*18
-n_epoches = 5
-dataset_size = 2000
+batch_size = 100*18
+n_epoches = 10
+dataset_size = 4000
 total_size = 500000
-n_runs = 5
+n_runs = 20
 starting = True
 over_sampled_dataset_size = dataset_size*1.8
+n_unlabelled_queries = 10417
+no_of_passages_per_query = 10
+over_sampling_factor = 8
+conv_strides = [1,1,1,1]
+maxpool_strides = [1,2,2,1]
 
 #cnn constants
 #for conv1 filter
@@ -89,27 +95,36 @@ bias_passage = {'b_conv1':tf.Variable(tf.random_normal([filter1_outn],name="pbc1
 weights_combined = {'out':tf.Variable(tf.random_normal([fc_x_combined,fc_y_combined],name="comboout"))}
 biased_combined = {'out':tf.Variable(tf.random_normal([fc_y_combined],name="combooutb"))}
 
+x1_train = tf.placeholder('float',[no_of_passages_per_query,max_query_words*emb_dim])
+x2_train = tf.placeholder('float',[no_of_passages_per_query,max_passage_words*emb_dim])
 
 #Load data from the file and store into np.arrays after converting them into word vectors
-def loadData(fileHandle):
-    global dataset_size
-    for i in range(dataset_size):
+def loadData(fileHandle,readSize,isEvaluation=False,overSample=False):
+    global dataset_size,query_vectors,passage_vectors,labels
+    
+    query_vectors = []
+    passage_vectors = []
+    labels = []
+    
+    for i in range(readSize):
 		datapoint = fileHandle.readline()
-		#print(datapoint)
-		TextDataToCTF(datapoint);
+		TextDataToCTF(datapoint,isEvaluation=isEvaluation,overSample=overSample)
+		
    
 
 #Load the embedding file into the dictionary
 def loadEmbeddings(embeddingfile):
 	global GloveEmbeddings,emb_dim
-
+	
 	fe = open(embeddingfile,"r")
+	
 	for line in fe:
 		tokens= line.strip().split()
 		word = tokens[0]
 		vec = tokens[1:]
 		vec = " ".join(vec)
 		GloveEmbeddings[word]=vec
+	
 	#For padding purpose(to max size)
 	GloveEmbeddings['zerovec'] = "0.0 "*emb_dim
 	fe.close()
@@ -117,10 +132,16 @@ def loadEmbeddings(embeddingfile):
 
 #Takes a line from the dataset file  as input produces the corresponding word embeddings
 #Populates three list -Query,Passage,Labels
-def TextDataToCTF(inputData,isEvaluation=False):
-   
+def TextDataToCTF(inputData,isEvaluation=False,overSample=False):
+    
+		global train_queryid
+		
 		tokens = inputData.strip().lower().split("\t")
-		query_id,query,passage,label = tokens[0],tokens[1],tokens[2],tokens[3]
+		if isEvaluation==False:
+			query_id,query,passage,label = tokens[0],tokens[1],tokens[2],tokens[3]
+		else:
+			query_id,query,passage,passage_id =tokens[0],tokens[1],tokens[2],tokens[3]
+			train_queryid=query_id
 
 		#****Query Processing****
 		words = re.split('\W+', query)
@@ -153,17 +174,20 @@ def TextDataToCTF(inputData,isEvaluation=False):
 				passage_feature_vector += GloveEmbeddings[word]+" "
 			else:
 				passage_feature_vector += GloveEmbeddings['zerovec']+" "
+		
 		#convert label
-		label_str = 0 if label=="0" else 1 
 		if isEvaluation == False :
+			label_str = int(label)
 			labels.append(label_str)
+		else:
+			label_str = -1
 
 		query_vectors.append([float(v) for v in query_feature_vector.split()])#Insert the entire word embedding of the query into the vector(size:1*(max_query_size*emb_dim))
 		passage_vectors.append([float(v) for v in passage_feature_vector.split()])#Insert the entire word embedding of the passage into the vector(size:1*(max_passage_size*emb_dim))
-		
+
 		# For oversampling,to balance the dataset
-		if label_str == 1:
-			for _ in range(8):
+		if label_str == 1 and overSample==True and isEvaluation ==False:
+			for _ in range(over_sampling_factor):
 				query_vectors.append([float(v) for v in query_feature_vector.split()])
 				passage_vectors.append([float(v) for v in passage_feature_vector.split()])
 				labels.append(label_str)
@@ -175,19 +199,19 @@ def TextDataToCTF(inputData,isEvaluation=False):
 #Definiton of the CNN model described above in tensorflow
 def cnn_model(x_query,x_passage):
 	
-	x_query= tf.reshape(x1, shape = [-1,max_query_words,emb_dim,1])
-	query_conv1 = maxpool2D(convolution2d(tf.cast(x_query,tf.float32),weights_query['W_conv1']+bias_query['b_conv1']))
-	query_conv2 = maxpool2D(convolution2d(query_conv1,weights_query['W_conv2']+bias_query['b_conv2'])) 
+	x_query = tf.reshape(x_query, shape = [-1,max_query_words,emb_dim,1])
+	query_conv1 = maxpool2D(convolution2d(tf.cast(x_query,tf.float32),weights_query['W_conv1'])+bias_query['b_conv1'])
+	query_conv2 = maxpool2D(convolution2d(query_conv1,weights_query['W_conv2'])+bias_query['b_conv2']) 
 	query_fc = tf.reshape(query_conv2,[-1,fc_x_query])
-	query_fc = tf.nn.relu(tf.matmul(query_fc,weights_query['W_fc']+bias_query['b_fc']))
+	query_fc = tf.nn.relu(tf.matmul(query_fc,weights_query['W_fc'])+bias_query['b_fc'])
 	query_fc = tf.nn.dropout(query_fc, keep_rate)
 	output_query = tf.matmul(query_fc,weights_query['out'])+bias_query['out']
 
-	x_passage = tf.reshape(x2, shape = [-1,max_passage_words,emb_dim,1])
-	passage_conv1 = maxpool2D(convolution2d(tf.cast(x_passage,tf.float32),weights_passage['W_conv1']+bias_passage['b_conv1']))
-	passage_conv2 = maxpool2D(convolution2d(passage_conv1,weights_passage['W_conv2']+bias_passage['b_conv2']))
+	x_passage = tf.reshape(x_passage, shape = [-1,max_passage_words,emb_dim,1])
+	passage_conv1 = maxpool2D(convolution2d(tf.cast(x_passage,tf.float32),weights_passage['W_conv1'])+bias_passage['b_conv1'])
+	passage_conv2 = maxpool2D(convolution2d(passage_conv1,weights_passage['W_conv2'])+bias_passage['b_conv2'])
 	passage_fc = tf.reshape(passage_conv2,[-1,fc_x_passage])
-	passage_fc = tf.nn.relu(tf.matmul(passage_fc,weights_passage['W_fc']))+bias_passage['b_fc']
+	passage_fc = tf.nn.relu(tf.matmul(passage_fc,weights_passage['W_fc'])+bias_passage['b_fc'])
 	passage_fc = tf.nn.dropout(passage_fc, keep_rate)
 	output_passage = tf.matmul(passage_fc,weights_passage['out'])+bias_passage['out']
 
@@ -198,55 +222,92 @@ def cnn_model(x_query,x_passage):
 
 #Function to perform convolution on the given inputs,using given weights
 def convolution2d(x,W):
-	return tf.nn.conv2d(x,W,strides=[1,1,1,1],padding="SAME")
+	return tf.nn.conv2d(x,W,strides=conv_strides,padding="SAME")
 
 #Function to perform max pooling on the input(reduces the input size due to striding)
 def maxpool2D(x):
-	return tf.nn.max_pool(x,ksize=[1,2,2,1],strides=[1,2,2,1],padding="SAME")
+	return tf.nn.max_pool(x,ksize=maxpool_strides,strides=maxpool_strides,padding="SAME")
 
 #Function to train the network
-def train_cnn_network(trainSetFileName):
+def train_cnn_network(trainSetFileName,saveFilePath):
 	global query_vectors,passage_vectors,labels,dataset_size
+	
 	prediction = cnn_model(x1,x2)
 	cost = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits_v2(logits=prediction, labels=y))
 	optimizer = tf.train.AdamOptimizer().minimize(cost)
 	saver = tf.train.Saver({"qc1":weights_query['W_conv1'],"qc2":weights_query['W_conv2'],"qfc":weights_query['W_fc'],"qout":weights_query['out'],"pc1":weights_passage['W_conv1'],"pc2":weights_passage['W_conv2'],"pfc":weights_passage['W_fc'],"pout":weights_passage['out'],"bqc1":bias_query['b_conv1'],"bqc2":bias_query['b_conv2'],"bqfc":bias_query['b_fc'],"bqout":bias_query['out'],"bpc1":bias_passage['b_conv1'],"bpc2":bias_passage['b_conv2'],"bpfc":bias_passage['b_fc'],"bpout":bias_passage['out'],"comboout":weights_combined['out'],"combooutb":biased_combined['out']}) #Need to add it for all the weights and bias variables
 
 	with tf.Session() as sess:
+		
 		sess.run(tf.global_variables_initializer())#intialize everything(like a constructor) and then restore the required variables
-		for j in range(n_runs):
+		print("intialized tensorflow variables")
+		
+		for k in range(n_runs):
 			trainData=open(trainSetFileName,'r')
-      		print("Run :"+str(j+1))
-      		for i in range(total_size/dataset_size):
-      			loadData(trainData) #reads dataset_size(500) lines from the file
-      			print("Using trainingdata "+str(i))
-      			query_vectors = np.array(query_vectors) #Convert the list into 2D-array(shape :dataset_size*(max_query_size*emb_dim))
-      			passage_vectors = np.array(passage_vectors)#Convert the list into 2D-array(shape :dataset_size*(max_passage_size*emb_dim)
-      			labels = np.array(([[v,1-v] for v in labels]))
-      			for epoch in range(n_epoches):
-      				epoch_loss = 0
-      				for i in range(int(over_sampled_dataset_size/batch_size)):
-      					_, c = sess.run([optimizer,cost], feed_dict={x1 : query_vectors[batch_size*i:batch_size*(i+1),:],x2 : passage_vectors[batch_size*(i):batch_size*(i+1),:],y : labels[batch_size*(i):batch_size*(i+1),:] })
-      					epoch_loss+=c
-       				print('Epoch', epoch+1, 'completed out of',n_epoches,'loss:',epoch_loss)
-        		saver.save(sess, './model2.ckpt')
-        		query_vectors = []
-        		passage_vectors = []
-        		labels = []
+			print("Run "+str(k+1)+" out of " +str(n_runs))
+			
+			for i in range(total_size/dataset_size):
+				loadData(trainData,dataset_size,overSample=True) #reads dataset_size(500) lines from the file
+				print("Using trainingdata "+str(i+1)+" out of "+str(total_size/dataset_size))
+				
+				query_vectors = np.array(query_vectors) #Convert the list into 2D-array(shape :dataset_size*(max_query_size*emb_dim))
+				passage_vectors = np.array(passage_vectors)#Convert the list into 2D-array(shape :dataset_size*(max_passage_size*emb_dim)
+				labels = np.array(([[1-v,v] for v in labels]))
+				
+				for epoch in range(n_epoches):
+					epoch_loss = 0
+					for i in range(int(over_sampled_dataset_size/batch_size)):
+						_, c = sess.run([optimizer,cost], feed_dict={x1 : query_vectors[batch_size*i:batch_size*(i+1),:],x2 : passage_vectors[batch_size*(i):batch_size*(i+1),:],y : labels[batch_size*(i):batch_size*(i+1),:] })
+						epoch_loss+=c
+					print("Epoch "+str(epoch+1)+" completed out of "+str(n_epoches)+" Loss:"+str(epoch_loss))
+        		
+        		saver.save(saveFilePath)
         		
 
-def validate_model(x1,x2,y):
+def validate_model(x1,x2,y,saveFilePath):
+	
 	prediction = cnn_model(x1,x2)
 	correct = tf.equal(tf.argmax(prediction, 1), tf.argmax(y, 1))
 	accuracy = tf.reduce_mean(tf.cast(correct, 'float'))
 	saver = tf.train.Saver({"qc1":weights_query['W_conv1'],"qc2":weights_query['W_conv2'],"qfc":weights_query['W_fc'],"qout":weights_query['out'],"pc1":weights_passage['W_conv1'],"pc2":weights_passage['W_conv2'],"pfc":weights_passage['W_fc'],"pout":weights_passage['out'],"bqc1":bias_query['b_conv1'],"bqc2":bias_query['b_conv2'],"bqfc":bias_query['b_fc'],"bqout":bias_query['out'],"bpc1":bias_passage['b_conv1'],"bpc2":bias_passage['b_conv2'],"bpfc":bias_passage['b_fc'],"bpout":bias_passage['out'],"comboout":weights_combined['out'],"combooutb":biased_combined['out']}) #Need to add it for all the weights and bias variables
+	
 	with tf.Session() as sess:
-		saver.restore(sess, "./model2.ckpt")
-		a=accuracy.eval({x1:query_vectors,x2:passage_vectors, y:labels})
-		pred=prediction.eval({x1:query_vectors,x2:passage_vectors, y:labels})
-		#Add print satements here
+		saver.restore(saveFilePath)
+		a = accuracy.eval({x1:query_vectors,x2:passage_vectors, y:labels})
+		print(a)
 
+def predict_labels(x1_train,x2_train,testSetFileName,submissionFileName,saveFilePath):
+	global query_vectors,passage_vectors
 
+	prediction = cnn_model(x1_train,x2_train)
+	saver = tf.train.Saver({"qc1":weights_query['W_conv1'],"qc2":weights_query['W_conv2'],"qfc":weights_query['W_fc'],"qout":weights_query['out'],"pc1":weights_passage['W_conv1'],"pc2":weights_passage['W_conv2'],"pfc":weights_passage['W_fc'],"pout":weights_passage['out'],"bqc1":bias_query['b_conv1'],"bqc2":bias_query['b_conv2'],"bqfc":bias_query['b_fc'],"bqout":bias_query['out'],"bpc1":bias_passage['b_conv1'],"bpc2":bias_passage['b_conv2'],"bpfc":bias_passage['b_fc'],"bpout":bias_passage['out'],"comboout":weights_combined['out'],"combooutb":biased_combined['out']})
+	testFile = open(testSetFileName,'r')
+	submissionFile =open(submissionFileName,'w')
+	queries_done = 0			
+	
+	for _ in range(n_unlabelled_queries):
+		
+		loadData(testFile,no_of_passages_per_query,isEvaluation=True)
+		
+		query_vectors = np.array(query_vectors)
+		passage_vectors =np.array(passage_vectors)
+		
+		print(str(train_queryid)+" "+str(queries_done))
+		submissionFile.write("\n"+str(train_queryid))
+		
+		with tf.Session() as sess:
+			saver.restore(sess, saveFilePath)
+			
+			pred = prediction.eval({x1_train:query_vectors,x2_train:passage_vectors})
+        	for entry in pred:
+        		if entry[0]>entry[1]:
+        			submissionFile.write("\t0")
+        		else:
+        			submissionFile.write("\t1")
+
+        	query_vectors = []
+        	passage_vectors = []
+        	queries_done+=1
 
 
 if __name__ == "__main__":
@@ -254,21 +315,30 @@ if __name__ == "__main__":
 	#Filenames
 	#trainSetFileName = "traindata.tsv"
     trainSetFileName = "data.tsv"
-    validationSetFileName = "valid1.tsv"
-    testSetFileName = "EvaluationData.ctf"
+    validationSetFileName = "validationdata2.tsv"
+    testSetFileName = "eval1_unlabelled.tsv"
     submissionFileName = "answer.tsv"
     embeddingFileName = "glove.6B.50d.txt"
+    saveFilePath = "./model_big1.ckpt"
     
     loadEmbeddings(embeddingFileName)
     
-    #This is for validation
+
+    ##Uncomment anyone functionality at a time
+    
+    ## This is for validation(validates one batch of trainingdata only)
     # validationData = open(validationSetFileName,'r')
-    # loadData(validationData) 
+    # trainData=open(trainSetFileName,'r')
+    # loadData(trainData,batch_size,overSample=False) 
     # query_vectors = np.array(query_vectors) 
     # passage_vectors = np.array(passage_vectors)
     # labels = np.array(([[v,1-v] for v in labels]))
-    # validate_model(x1,x2,y)
+    # validate_model(x1,x2,y,saveFilePath)
     
-    #This is for training
-    train_cnn_network(trainSetFileName)
+    ##This is for training
+    train_cnn_network(trainSetFileName,saveFilePath)
+
+    ##This is for prediction
+    # predict_labels(x1_train,x2_train,testSetFileName,submissionFileName,saveFilePath)
+
 
