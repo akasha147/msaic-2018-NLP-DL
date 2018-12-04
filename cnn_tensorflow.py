@@ -276,13 +276,14 @@ def validate_model(x1,x2,y,saveFilePath):
 		a = accuracy.eval({x1:query_vectors,x2:passage_vectors, y:labels})
 		print(a)
 
-def predict_labels(x1_train,x2_train,testSetFileName,submissionFileName,saveFilePath):
+def predict_labels(x1_train,x2_train,testSetFileName,submissionFileName1,submissionFileName2,saveFilePath):
 	global query_vectors,passage_vectors
 
 	prediction = cnn_model(x1_train,x2_train)
 	saver = tf.train.Saver({"qc1":weights_query['W_conv1'],"qc2":weights_query['W_conv2'],"qfc":weights_query['W_fc'],"qout":weights_query['out'],"pc1":weights_passage['W_conv1'],"pc2":weights_passage['W_conv2'],"pfc":weights_passage['W_fc'],"pout":weights_passage['out'],"bqc1":bias_query['b_conv1'],"bqc2":bias_query['b_conv2'],"bqfc":bias_query['b_fc'],"bqout":bias_query['out'],"bpc1":bias_passage['b_conv1'],"bpc2":bias_passage['b_conv2'],"bpfc":bias_passage['b_fc'],"bpout":bias_passage['out'],"comboout":weights_combined['out'],"combooutb":biased_combined['out']})
 	testFile = open(testSetFileName,'r')
-	submissionFile =open(submissionFileName,'w')
+	submissionFile1 = open(submissionFileName1,'w')
+	submissionFile2 = open(submissionFileName2,'w')
 	queries_done = 0			
 	
 	for _ in range(n_unlabelled_queries):
@@ -293,7 +294,12 @@ def predict_labels(x1_train,x2_train,testSetFileName,submissionFileName,saveFile
 		passage_vectors =np.array(passage_vectors)
 		
 		print(str(train_queryid)+" "+str(queries_done))
-		submissionFile.write("\n"+str(train_queryid))
+		if queries_done != 0:
+			submissionFile1.write("\n")
+			submissionFile2.write("\n")
+		submissionFile1.write(train_queryid)
+		submissionFile2.write(train_queryid)
+
 		
 		with tf.Session() as sess:
 			saver.restore(sess, saveFilePath)
@@ -301,9 +307,10 @@ def predict_labels(x1_train,x2_train,testSetFileName,submissionFileName,saveFile
 			pred = prediction.eval({x1_train:query_vectors,x2_train:passage_vectors})
         	for entry in pred:
         		if entry[0]>entry[1]:
-        			submissionFile.write("\t0")
+        			submissionFile1.write("\t0")
         		else:
-        			submissionFile.write("\t1")
+        			submissionFile1.write("\t1")
+        		submissionFile2.write(str(entry[1]-entry[0]))
 
         	query_vectors = []
         	passage_vectors = []
@@ -317,9 +324,10 @@ if __name__ == "__main__":
     trainSetFileName = "data.tsv"
     validationSetFileName = "validationdata2.tsv"
     testSetFileName = "eval1_unlabelled.tsv"
-    submissionFileName = "answer.tsv"
+    submissionFileName1 = "answer_binary.tsv"
+    submissionFileName2 = "answer_diff.tsv"
     embeddingFileName = "glove.6B.50d.txt"
-    saveFilePath = "./model_big1.ckpt"
+    saveFilePath = "./model_big.ckpt"
     
     loadEmbeddings(embeddingFileName)
     
@@ -336,9 +344,9 @@ if __name__ == "__main__":
     # validate_model(x1,x2,y,saveFilePath)
     
     ##This is for training
-    train_cnn_network(trainSetFileName,saveFilePath)
+    # train_cnn_network(trainSetFileName,saveFilePath)
 
     ##This is for prediction
-    # predict_labels(x1_train,x2_train,testSetFileName,submissionFileName,saveFilePath)
+    predict_labels(x1_train,x2_train,testSetFileName,submissionFileName1,submissionFileName2,saveFilePath)
 
 
