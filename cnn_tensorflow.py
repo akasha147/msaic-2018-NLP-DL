@@ -1,6 +1,7 @@
 import numpy as np
 import tensorflow as tf
 import re
+import math
 
 #Initialize Global variables
 #Dataset lists
@@ -23,16 +24,14 @@ max_query_words=12
 max_passage_words=50
 emb_dim=50
 n_classes = 2 
-batch_size = 100*18
-n_epoches = 10
-dataset_size = 4000
-total_size = 500000
-n_runs = 20
+batch_size = 2000
+n_epoches = 5
+dataset_size = 10000
+total_size = 2000000
+n_runs = 5
 starting = True
-over_sampled_dataset_size = dataset_size*1.8
 n_unlabelled_queries = 10417
 no_of_passages_per_query = 10
-over_sampling_factor = 8
 conv_strides = [1,1,1,1]
 maxpool_strides = [1,2,2,1]
 
@@ -64,6 +63,9 @@ keep_rate = 0.8
 #for combined out layer
 fc_x_combined = 4
 fc_y_combined = n_classes
+
+
+
 
 
 """
@@ -99,16 +101,16 @@ x1_train = tf.placeholder('float',[no_of_passages_per_query,max_query_words*emb_
 x2_train = tf.placeholder('float',[no_of_passages_per_query,max_passage_words*emb_dim])
 
 #Load data from the file and store into np.arrays after converting them into word vectors
-def loadData(fileHandle,readSize,isEvaluation=False,overSample=False):
-    global dataset_size,query_vectors,passage_vectors,labels
+def loadData(fileHandle,readSize,isEvaluation=False):
+    global dataset_size,query_vectors,passage_vectors,labels,count
     
     query_vectors = []
     passage_vectors = []
     labels = []
-    
     for i in range(readSize):
 		datapoint = fileHandle.readline()
-		TextDataToCTF(datapoint,isEvaluation=isEvaluation,overSample=overSample)
+		TextDataToCTF(datapoint,isEvaluation=isEvaluation)
+			
 		
    
 
@@ -132,16 +134,18 @@ def loadEmbeddings(embeddingfile):
 
 #Takes a line from the dataset file  as input produces the corresponding word embeddings
 #Populates three list -Query,Passage,Labels
-def TextDataToCTF(inputData,isEvaluation=False,overSample=False):
+def TextDataToCTF(inputData,isEvaluation=False):
     
-		global train_queryid
+		global train_queryid,count
 		
 		tokens = inputData.strip().lower().split("\t")
-		if isEvaluation==False:
+		if isEvaluation == False:
 			query_id,query,passage,label = tokens[0],tokens[1],tokens[2],tokens[3]
+			train_queryid=query_id
 		else:
 			query_id,query,passage,passage_id =tokens[0],tokens[1],tokens[2],tokens[3]
 			train_queryid=query_id
+		
 
 		#****Query Processing****
 		words = re.split('\W+', query)
@@ -185,13 +189,7 @@ def TextDataToCTF(inputData,isEvaluation=False,overSample=False):
 		query_vectors.append([float(v) for v in query_feature_vector.split()])#Insert the entire word embedding of the query into the vector(size:1*(max_query_size*emb_dim))
 		passage_vectors.append([float(v) for v in passage_feature_vector.split()])#Insert the entire word embedding of the passage into the vector(size:1*(max_passage_size*emb_dim))
 
-		# For oversampling,to balance the dataset
-		if label_str == 1 and overSample==True and isEvaluation ==False:
-			for _ in range(over_sampling_factor):
-				query_vectors.append([float(v) for v in query_feature_vector.split()])
-				passage_vectors.append([float(v) for v in passage_feature_vector.split()])
-				labels.append(label_str)
-		#Now we will have 18 query-passage pairs(9 class 0 9 class 1)
+		
 
 
 
@@ -247,16 +245,17 @@ def train_cnn_network(trainSetFileName,saveFilePath):
 			print("Run "+str(k+1)+" out of " +str(n_runs))
 			
 			for i in range(total_size/dataset_size):
-				loadData(trainData,dataset_size,overSample=True) #reads dataset_size(500) lines from the file
+				loadData(trainData,dataset_size) #reads dataset_size(500) lines from the file
 				print("Using trainingdata "+str(i+1)+" out of "+str(total_size/dataset_size))
 				
 				query_vectors = np.array(query_vectors) #Convert the list into 2D-array(shape :dataset_size*(max_query_size*emb_dim))
 				passage_vectors = np.array(passage_vectors)#Convert the list into 2D-array(shape :dataset_size*(max_passage_size*emb_dim)
 				labels = np.array(([[1-v,v] for v in labels]))
 				
+				
 				for epoch in range(n_epoches):
 					epoch_loss = 0
-					for i in range(int(over_sampled_dataset_size/batch_size)):
+					for i in range(int(dataset_size/batch_size)):
 						_, c = sess.run([optimizer,cost], feed_dict={x1 : query_vectors[batch_size*i:batch_size*(i+1),:],x2 : passage_vectors[batch_size*(i):batch_size*(i+1),:],y : labels[batch_size*(i):batch_size*(i+1),:] })
 						epoch_loss+=c
 					print("Epoch "+str(epoch+1)+" completed out of "+str(n_epoches)+" Loss:"+str(epoch_loss))
@@ -310,7 +309,7 @@ def predict_labels(x1_train,x2_train,testSetFileName,submissionFileName1,submiss
         			submissionFile1.write("\t0")
         		else:
         			submissionFile1.write("\t1")
-        		submissionFile2.write(str(entry[1]-entry[0]))
+        		submissionFile2.write("\t"+str(entry[1]-entry[0]))
 
         	query_vectors = []
         	passage_vectors = []
@@ -321,13 +320,13 @@ if __name__ == "__main__":
 
 	#Filenames
 	#trainSetFileName = "traindata.tsv"
-    trainSetFileName = "data.tsv"
+    trainSetFileName = "oversampled_data.tsv"
     validationSetFileName = "validationdata2.tsv"
     testSetFileName = "eval1_unlabelled.tsv"
     submissionFileName1 = "answer_binary.tsv"
-    submissionFileName2 = "answer_diff.tsv"
+    submissionFileName2 = "answer_diff1.tsv"
     embeddingFileName = "glove.6B.50d.txt"
-    saveFilePath = "./model_big.ckpt"
+    saveFilePath = "./model_big2.ckpt"
     
     loadEmbeddings(embeddingFileName)
     
@@ -337,16 +336,16 @@ if __name__ == "__main__":
     ## This is for validation(validates one batch of trainingdata only)
     # validationData = open(validationSetFileName,'r')
     # trainData=open(trainSetFileName,'r')
-    # loadData(trainData,batch_size,overSample=False) 
+    # loadData(trainData,batch_size) 
     # query_vectors = np.array(query_vectors) 
     # passage_vectors = np.array(passage_vectors)
     # labels = np.array(([[v,1-v] for v in labels]))
     # validate_model(x1,x2,y,saveFilePath)
     
     ##This is for training
-    # train_cnn_network(trainSetFileName,saveFilePath)
+    train_cnn_network(trainSetFileName,saveFilePath)
 
     ##This is for prediction
-    predict_labels(x1_train,x2_train,testSetFileName,submissionFileName1,submissionFileName2,saveFilePath)
+    # predict_labels(x1_train,x2_train,testSetFileName,submissionFileName1,submissionFileName2,saveFilePath)
 
 
