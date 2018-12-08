@@ -73,5 +73,10 @@ for line in dataset:
     query_id,query,passage,label,passage_id = tokens[0],tokens[1],tokens[2],tokens[3],tokens[4]
  
     for k in fs.summarize(passage, 1):
-	summary = k;
+      summary = k;
     print(query_id+"\t"+query+"\t"+summary+"\t"+label+"\t"+passage_id)
+    if int(label) == 1:
+      for _ in range(8):
+        print(query_id+"\t"+query+"\t"+summary+"\t"+label+"\t"+passage_id)
+        
+
